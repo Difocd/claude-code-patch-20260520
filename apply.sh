@@ -109,4 +109,28 @@ apply_patch "Enable adaptive thinking for opus-4-7 (WT8)" \
   '_.includes("opus-4-6")||_.includes("sonnet-4-6")' \
   '_.includes("opus-4-6")||_.includes("sonnet-4-6")||_.includes("opus-4-7")'
 
+# 24. Remove git commit Co-Authored-By + "Generated with" attribution (KR6).
+#     In 2.1.89, KR6() builds z=`...Generated with [Claude Code]...` and
+#     Y=`Co-Authored-By: ...`. We blank both. The replacement string is
+#     anchored on the preceding "Claude Opus 4.6", string literal so the
+#     idempotency check (which looks for `new` already in the file) is not
+#     defeated by `z="",Y=""` appearing elsewhere in the minified bundle.
+apply_patch "Remove commit attribution (KR6)" \
+  '"Claude Opus 4.6",z=`\uD83E\uDD16 Generated with [Claude Code](${Iw6})`,Y=`Co-Authored-By: ${_} <noreply@anthropic.com>`' \
+  '"Claude Opus 4.6",z="",Y=""'
+
+# 25. Remove default PR attribution (aPK, default path).
+#     Anchored on the preceding `if(K.includeCoAuthoredBy===!1)return"";`
+#     guard so the resulting `let _=""` is unique in the file.
+apply_patch "Remove default PR attribution (aPK)" \
+  'if(K.includeCoAuthoredBy===!1)return"";let _=`\uD83E\uDD16 Generated with [Claude Code](${Iw6})`' \
+  'if(K.includeCoAuthoredBy===!1)return"";let _=""'
+
+# 26. Remove enhanced PR attribution (aPK, summary path).
+#     Anchored on the preceding `recalled` ternary so the resulting
+#     `,M=""` is unique in the file.
+apply_patch "Remove enhanced PR attribution (aPK)" \
+  'let J=O>0?`, ${O} ${O===1?"memory":"memories"} recalled`:"",M=`\uD83E\uDD16 Generated with [Claude Code](${Iw6}) (${w}% ${$}-shotted by ${H}${J})`' \
+  'let J=O>0?`, ${O} ${O===1?"memory":"memories"} recalled`:"",M=""'
+
 echo "done."
