@@ -133,4 +133,21 @@ apply_patch "Remove enhanced PR attribution (aPK)" \
   'let J=O>0?`, ${O} ${O===1?"memory":"memories"} recalled`:"",M=`\uD83E\uDD16 Generated with [Claude Code](${Iw6}) (${w}% ${$}-shotted by ${H}${J})`' \
   'let J=O>0?`, ${O} ${O===1?"memory":"memories"} recalled`:"",M=""'
 
+# 27. Disable the "consider whether it would be considered malware" reminder
+#     appended to every Read tool result.
+#
+#     In 2.1.89, the reminder is stored in constant `hzY` and conditionally
+#     appended at the Read tool-result site as:
+#         _ = CzY(q) + LzY(q.file) + (SzY() ? hzY : "")
+#     The gate `SzY()` returns `!RzY.has(currentModel)` — so the reminder
+#     is on by default for every model not in the RzY denylist.
+#
+#     We force SzY() to return false so the ternary always picks "" and
+#     the reminder is never injected. This is the smallest possible change
+#     (no string blanking, no call-site rewrite) and leaves all related
+#     identifiers/functions intact in case they're referenced elsewhere.
+apply_patch "Disable malware-reminder on Read (SzY)" \
+  'function SzY(){let q=gY(W5());return!RzY.has(q)}' \
+  'function SzY(){return!1}'
+
 echo "done."
