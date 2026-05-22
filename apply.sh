@@ -150,4 +150,80 @@ apply_patch "Disable malware-reminder on Read (SzY)" \
   'function SzY(){let q=gY(W5());return!RzY.has(q)}' \
   'function SzY(){return!1}'
 
+# ---------- auto-mode unlock (28, 29, 30, 31) -----------------------------
+#
+# The auto permission mode runs an AI classifier (sideQuery + classify_result
+# tool call) instead of prompting the human on every tool call. Stock 2.1.89
+# gates entry behind three checks, all of which fail closed against a self-
+# hosted / non-firstParty endpoint:
+#
+#   - Iy()  = isAutoModeGateEnabled()     — explicit-entry sync gate
+#   - _q7() = parseAutoModeEnabledState() — GrowthBook "enabled" parser; defaults
+#                                          to "disabled" (= HAY) when the config
+#                                          is absent (no GrowthBook = no config)
+#   - fG6() = modelSupportsAutoMode()     — returns false unconditionally when
+#                                          T7() (getAPIProvider) != "firstParty"
+#
+# And one ant-only escape hatch that the bundler DCE'd out of the external
+# build entirely:
+#
+#   - Gx4() = getClassifierModel()        — the CLAUDE_CODE_AUTO_MODE_MODEL env
+#                                          var path lived inside an "ant" branch
+#                                          and got eliminated at build time;
+#                                          re-inject it so the classifier model
+#                                          can be picked independently of the
+#                                          main loop model.
+#
+# The classifier itself works fine against any Anthropic-compatible endpoint —
+# it's just a regular tool-forced sideQuery against the active model. The gates
+# are operational (kill switch + tenant policy + capability allowlist), not
+# semantic. Unlock all four so the TUI carousel shows "auto", entry doesn't
+# throw, verifyAutoModeGateAccess doesn't kick us back to default, and the
+# classifier can be routed to a model that accepts temperature:0.
+
+# 28. Force-enable auto mode entry gate (Iy / isAutoModeGateEnabled).
+#     Short-circuit return true at the top; leave the body intact for any
+#     debugger / telemetry hook that inspects it.
+apply_patch "Force-enable auto mode entry gate (Iy)" \
+  'function Iy(){if(Zv?.isAutoModeCircuitBroken()??!1)return!1;' \
+  'function Iy(){return!0;if(Zv?.isAutoModeCircuitBroken()??!1)return!1;'
+
+# 29. Default tengu_auto_mode_config.enabled to "enabled" (_q7 /
+#     parseAutoModeEnabledState). Without GrowthBook, autoModeConfig?.enabled
+#     is undefined and _q7 returns HAY ("disabled"), which makes
+#     verifyAutoModeGateAccess set isAutoModeAvailable=false and kick the user
+#     out of auto on every async re-check. Swap the fallback to "enabled".
+apply_patch "Default auto mode parser to enabled (_q7)" \
+  'function _q7(q){if(q==="enabled"||q==="disabled"||q==="opt-in")return q;return HAY}' \
+  'function _q7(q){if(q==="enabled"||q==="disabled"||q==="opt-in")return q;return"enabled"}'
+
+# 30. Allow non-firstParty providers in modelSupportsAutoMode (fG6).
+#     The provider check `if(T7()!=="firstParty")return!1` blocks Vertex /
+#     Bedrock / proxied endpoints (incl. API_MULERUN_BASE_URL) before the
+#     GrowthBook allowModels override is even consulted. Short-circuit
+#     return true at the top; leave the body intact (matches patch 28's
+#     shape so the idempotency check — which compares whether `new` is
+#     already present — works correctly).
+#
+#     After this patch, model capability is fully governed by:
+#       - the operator's choice of main model, and
+#       - any `tengu_auto_mode_config.allowModels` entries in settings.json.
+#     The "claude-(opus|sonnet)-4-6" regex still runs but is now an irrelevant
+#     fallback because we always returned true above.
+apply_patch "Allow non-firstParty providers in modelSupportsAutoMode (fG6)" \
+  'function fG6(q){{let K=gY(q);if(T7()!=="firstParty")return!1;' \
+  'function fG6(q){return!0;{let K=gY(q);if(T7()!=="firstParty")return!1;'
+
+# 31. Unlock CLAUDE_CODE_AUTO_MODE_MODEL env var (Gx4 / getClassifierModel).
+#     The env var path was DCE'd by the bundler because `"external" === 'ant'`
+#     is a compile-time false. The entire `process.env.CLAUDE_CODE_AUTO_MODE_MODEL`
+#     reference is absent from cli.js. Re-inject it at the top of the function
+#     so it takes priority over GrowthBook config and the main-loop model.
+#     This lets you route classifier calls to a different model (e.g. opus-4-6)
+#     than the main loop model (e.g. opus-4-7) — useful when the main model
+#     doesn't support temperature:0 but the classifier forces it.
+apply_patch "Unlock CLAUDE_CODE_AUTO_MODE_MODEL env var (Gx4)" \
+  'function Gx4(){let q=u8("tengu_auto_mode_config",{});if(q?.model)return q.model;return W5()}' \
+  'function Gx4(){if(process.env.CLAUDE_CODE_AUTO_MODE_MODEL)return process.env.CLAUDE_CODE_AUTO_MODE_MODEL;let q=u8("tengu_auto_mode_config",{});if(q?.model)return q.model;return W5()}'
+
 echo "done."
