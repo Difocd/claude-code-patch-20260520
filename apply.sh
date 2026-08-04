@@ -226,4 +226,25 @@ apply_patch "Unlock CLAUDE_CODE_AUTO_MODE_MODEL env var (Gx4)" \
   'function Gx4(){let q=u8("tengu_auto_mode_config",{});if(q?.model)return q.model;return W5()}' \
   'function Gx4(){if(process.env.CLAUDE_CODE_AUTO_MODE_MODEL)return process.env.CLAUDE_CODE_AUTO_MODE_MODEL;let q=u8("tengu_auto_mode_config",{});if(q?.model)return q.model;return W5()}'
 
+# 32. Ignore the entire `hooks` section of settings.json.
+#     The settings schema validates hooks with uR() = partialRecord(enum(IR)),
+#     where IR is the hardcoded HOOK_EVENTS list. Any unknown key (e.g.
+#     "PostToolBatch") fails validation, and Claude Code rejects the ENTIRE
+#     settings file with:
+#         "hooks └ PostToolBatch: Invalid key in record"
+#     Files with errors are skipped entirely, so all other settings in the
+#     rejected file also disappear.
+#
+#     Fix: at the settings schema call site, replace uR() with a permissive
+#     schema that accepts anything and transforms it to undefined. Parsing
+#     always succeeds and the runtime sees no hooks — effectively "hooks
+#     section ignored".
+#
+#     Anchored on the unique describe string, so only the settings schema
+#     call site is patched. Other uR() callers (plugin/agent frontmatter,
+#     SDK hooks) are left intact.
+apply_patch "Ignore hooks in settings.json schema" \
+  'hooks:uR().optional().describe("Custom commands to run before/after tool executions")' \
+  'hooks:L.any().transform(()=>void 0).describe("Custom commands to run before/after tool executions")'
+
 echo "done."
