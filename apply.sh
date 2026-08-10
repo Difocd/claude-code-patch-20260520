@@ -247,4 +247,45 @@ apply_patch "Ignore hooks in settings.json schema" \
   'hooks:uR().optional().describe("Custom commands to run before/after tool executions")' \
   'hooks:L.any().transform(()=>void 0).describe("Custom commands to run before/after tool executions")'
 
+# ---------- opus-4-8 / opus-5 support (33, 34, 35) ------------------------
+#
+# Same shape as patch 22/23 but extended to keep opus-4-8 and opus-5 distinct
+# in TT() and enable adaptive thinking for them in WT8(). Plus a new patch 35
+# that widens P16()'s 64K max-output / 128K upper-limit branch (currently
+# opus-4-6 only) to cover the whole modern opus line.
+
+# 33. Canonicalize claude-opus-4-8 and claude-opus-5 in TT() (getCanonicalName).
+#     Same rationale as patch 22 — the fallback `opus-4` branch would strip
+#     "-8" from "claude-opus-4-8". "claude-opus-5" doesn't match the "opus-4"
+#     fallback but we add it here for symmetry so the canonical name stays
+#     exact. Inserted before the opus-4-7 branch added by patch 22.
+#     Note: the anchor omits the leading `if(` because patch 22 inserted the
+#     opus-4-7 branch inside the comma-expression head of TT() — the actual
+#     source reads `q=q.toLowerCase(),q.includes("claude-opus-4-7")...`. The
+#     new opus-5 / opus-4-8 branches, being separate statements after that
+#     comma expression, get their own `if(` prefixes in the replacement.
+apply_patch "Canonicalize claude-opus-4-8 + claude-opus-5 (TT)" \
+  'q.includes("claude-opus-4-7"))return"claude-opus-4-7"' \
+  'q.includes("claude-opus-5"))return"claude-opus-5";if(q.includes("claude-opus-4-8"))return"claude-opus-4-8";if(q.includes("claude-opus-4-7"))return"claude-opus-4-7"'
+
+# 34. Enable adaptive thinking for opus-4-8 + opus-5 in WT8().
+#     Extends the allowlist widened by patch 23. Without this, once patch 33
+#     keeps the models distinct they still fall through to the legacy
+#     contains("opus") exclusion and get thinking.type="enabled" + budget
+#     tokens, which these models reject (400).
+apply_patch "Enable adaptive thinking for opus-4-8 + opus-5 (WT8)" \
+  '_.includes("opus-4-6")||_.includes("sonnet-4-6")||_.includes("opus-4-7")' \
+  '_.includes("opus-4-6")||_.includes("sonnet-4-6")||_.includes("opus-4-7")||_.includes("opus-4-8")||_.includes("opus-5")'
+
+# 35. Widen P16() max-output branch to cover opus-4-6/4-7/4-8/5.
+#     P16(model) picks the default (K) and upper-limit (_) max_tokens for a
+#     given model. Stock code only gives opus-4-6 the 64K/128K bucket; every
+#     other opus falls through to the 32K default branch. Modern opus models
+#     (4.7, 4.8, 5) also support 128K output and should get the same 64K
+#     default that opus-4-6 gets — otherwise long responses get truncated
+#     mid-thought at 32K.
+apply_patch "Set 64K/128K max output for opus-4-6/4-7/4-8/5 (P16)" \
+  'if(z.includes("opus-4-6"))K=64000,_=128000' \
+  'if(z.includes("opus-4-6")||z.includes("opus-4-7")||z.includes("opus-4-8")||z.includes("opus-5"))K=64000,_=128000'
+
 echo "done."
