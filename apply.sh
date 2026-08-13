@@ -288,4 +288,57 @@ apply_patch "Set 64K/128K max output for opus-4-6/4-7/4-8/5 (P16)" \
   'if(z.includes("opus-4-6"))K=64000,_=128000' \
   'if(z.includes("opus-4-6")||z.includes("opus-4-7")||z.includes("opus-4-8")||z.includes("opus-5"))K=64000,_=128000'
 
+# ---------- /context offline token counting (36) ---------------------------
+#
+# 36. Make B18() (countTokensWithFallback) estimate locally instead of
+#     calling the API. This is the single chokepoint every /context category
+#     counter funnels through:
+#
+#       - system prompt sections   (one call per section)
+#       - memory files             (one call per CLAUDE.md)
+#       - builtin tools            (bulk + one per deferred tool)
+#       - MCP tools                (bulk)
+#       - custom agents            (one per agent)
+#       - the Skill tool           (counted TWICE — the second result is
+#                                   discarded by the caller anyway)
+#       - the whole message history
+#
+#     Stock B18 first tries La6() (countMessagesTokensWithAPI ->
+#     POST /v1/messages/count_tokens with a dummy `content:"foo"` message
+#     when only tools are being counted), and on failure escalates to
+#     XfK() (countTokensViaHaikuFallback -> a REAL billed POST /v1/messages
+#     with `content:"count"` and max_tokens:1, just to read back
+#     usage.input_tokens; the response content is null by design).
+#
+#     Two problems this causes:
+#       a) /context is slow — dozens of serialized/fanned-out round trips,
+#          with no caching whatsoever (withTokenCountVCR is a no-op unless
+#          NODE_ENV=test, so nothing is memoized between invocations).
+#       b) On endpoints that don't implement /v1/messages/count_tokens the
+#          first call 404s and EVERY counter escalates to the Haiku
+#          fallback — doubling the request count. The fallback is also
+#          simply wrong: it counts against getSmallFastModel(), not the
+#          main loop model, so it reports another model's tokenization.
+#
+#     Fix: count locally with T3() (roughTokenCountEstimation, chars/N).
+#     Strings use the default ratio 4; tool schemas are dense JSON
+#     ({,},:,",) so they use ratio 2 — matching the rationale behind the
+#     stock bytesPerTokenForFileType() json=2 case. When tools are present
+#     we add back the 500-token tool-prompt preamble that the real API
+#     includes, because callers subtract TOOL_TOKEN_COUNT_OVERHEAD (500)
+#     from the result. Adding it also guarantees a non-zero return, which
+#     callers treat as the "API unavailable" sentinel.
+#
+#     Accuracy note: /context's headline total is NOT affected. It already
+#     prefers real usage from the last API response via getCurrentUsage()
+#     (input_tokens + cache_creation + cache_read) and only falls back to
+#     the sum of these estimates when no assistant turn has happened yet.
+#     So the total stays exact after the first reply; only the per-category
+#     row attribution becomes approximate (~±20-30%), which the stock code
+#     already does anyway for its per-tool breakdowns (roughTokenCount-
+#     Estimation at the systemToolDetails and mcpToolTokensByTool sites).
+apply_patch "Estimate /context tokens locally, no API calls (B18)" \
+  'async function B18(q,K){try{let _=await La6(q,K);if(_!==null)return _;N(`countTokensWithFallback: API returned null, trying haiku fallback (${K.length} tools)`)}catch(_){N(`countTokensWithFallback: API failed: ${g6(_)}`),j6(_)}try{let _=await XfK(q,K);if(_===null)N(`countTokensWithFallback: haiku fallback also returned null (${K.length} tools)`);return _}catch(_){return N(`countTokensWithFallback: haiku fallback failed: ${g6(_)}`),j6(_),null}}' \
+  'async function B18(q,K){let _=0;if(q)for(let z of q){let Y=z?.content;if(typeof Y==="string")_+=T3(Y);else if(Y!=null)_+=T3(JSON.stringify(Y))}if(K&&K.length>0)_+=T3(JSON.stringify(K),2)+500;return _}'
+
 echo "done."

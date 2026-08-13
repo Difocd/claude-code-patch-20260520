@@ -53,6 +53,54 @@ mid-thought at 32K.
 Fix: widen the `opus-4-6` branch to also match `opus-4-7`, `opus-4-8`,
 and `opus-5` so they all get the 64K default / 128K upper-limit bucket.
 
+### Patch 36 — `B18()` (a.k.a. `countTokensWithFallback`)
+
+`/context` computed every row of its token table over the network. `B18`
+is the chokepoint all the category counters funnel through — system
+prompt sections (one call each), memory files (one call each), builtin
+tools (bulk + one per deferred tool), MCP tools, custom agents (one
+each), the `Skill` tool (counted **twice**, second result discarded),
+and the whole message history.
+
+Nothing was cached: `withTokenCountVCR` is a pass-through unless
+`NODE_ENV=test`, so every `/context` re-counted from scratch.
+
+Worse, `B18` had a two-stage escalation:
+
+1. `La6()` → `POST /v1/messages/count_tokens`, sending a dummy
+   `content:"foo"` message when only tools are being counted (the API
+   rejects an empty `messages` array).
+2. on failure, `XfK()` → a **real, billed** `POST /v1/messages` with
+   `content:"count"` and `max_tokens:1`, purely to read back
+   `usage.input_tokens`. The response content is `null` by design.
+
+On endpoints without `count_tokens`, stage 1 404s and *every* counter
+escalates to stage 2 — doubling the request count. Stage 2 is also just
+wrong: it counts against `getSmallFastModel()`, not the main loop model,
+so it reports a different model's tokenization.
+
+Fix: count locally via `T3()` (`roughTokenCountEstimation`). Strings use
+the default chars/4; tool schemas are dense JSON so they use chars/2
+(same rationale as the stock `bytesPerTokenForFileType()` `json:2`
+case). When tools are present, the 500-token tool-prompt preamble is
+added back, since callers subtract `TOOL_TOKEN_COUNT_OVERHEAD` (500) —
+and a non-zero return also avoids the "API unavailable" sentinel that
+callers test for.
+
+Result: `/context` makes **zero** API calls (`duration_api_ms: 0`) and
+returns instantly. `XfK` is left with no callers. The two remaining
+`La6` callers (`FileReadTool`, `mcpValidation`) are untouched — they
+pass real content, never the `"foo"` dummy.
+
+**Accuracy:** the headline total is unaffected. `analyzeContextUsage`
+already prefers real usage from the last API response via
+`getCurrentUsage()` (`input_tokens + cache_creation + cache_read`), and
+only sums the estimates when no assistant turn has happened yet (e.g.
+a fresh session, or `claude -p "/context"`). So the total stays exact
+after the first reply; only per-category attribution becomes
+approximate (~±20-30%) — which the stock code already did anyway for
+its per-tool breakdowns.
+
 ## Usage
 
 ```sh
